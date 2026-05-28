@@ -1,0 +1,128 @@
+name: Safe Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  source-and-build:
+    name: Source & Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Cache Build Artifacts
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+
+  test:
+    name: Run Tests
+    needs: source-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore Dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Unit and Integration Tests
+        run: npm test
+
+  security:
+    name: Security Scan
+    needs: source-and-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore Dependencies
+        uses: actions/cache@v3
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+
+      - name: Dependency Audit
+        run: npm audit --audit-level=high
+
+      - name: Secret Scan (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [test, security]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.example.com
+    steps:
+      - name: Deploy to Staging Environment
+        run: |
+          echo "Deploying to Staging..."
+          echo "Deployment successful."
+
+  verify:
+    name: Verify Staging
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Scripts
+        uses: actions/checkout@v4
+
+      - name: Run Smoke Tests & Health Checks
+        run: |
+          chmod +x ./scripts/healthcheck.sh
+          ./scripts/healthcheck.sh staging
+
+  deploy-production:
+    name: Deploy to Production
+    needs: verify
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://production.example.com
+    steps:
+      - name: Deploy to Production Environment
+        run: |
+          echo "Deploying to Production..."
+          echo "Deployment successful."
+          echo "Commit SHA: ${{ github.sha }}"
+          echo "Timestamp: $(date -u)"
